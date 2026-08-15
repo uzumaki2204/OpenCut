@@ -1,0 +1,35 @@
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Dependencies
+node_modules
+
+# Build outputs and caches
+.turbo
+.next
+.open-next
+.vercel
+.wrangler
+.cache
+.parcel-cache
+.content-collections
+.font-cache
+coverage
+dist
+build
+out
+target
+*.tsbuildinfo
+
+# Environment files
+.env*
+!.env.example
+!**/.env.example
+
+# Local editor and tool state
+.cursor/
+.cursorignore
+.tool-versions
+.cargo-tools/

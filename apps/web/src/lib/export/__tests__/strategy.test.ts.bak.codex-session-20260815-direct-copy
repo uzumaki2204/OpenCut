@@ -1,0 +1,171 @@
+import { describe, expect, test } from "bun:test";
+import type { ExportOptions } from "@/lib/export";
+import {
+	estimateEncodedExportBytes,
+	estimateTimelineAudioBufferBytes,
+	exceedsCompatibilityBufferLimit,
+	exceedsFallbackAudioBufferLimit,
+	getFastExportCandidate,
+} from "@/lib/export/strategy";
+import type { MediaAsset } from "@/lib/media/types";
+import type { SceneTracks, VideoElement } from "@/lib/timeline";
+
+const TICKS_PER_SECOND = 120_000;
+const EIGHT_HOURS = 8 * 60 * 60 * TICKS_PER_SECOND;
+const OPTIONS: ExportOptions = {
+	format: "mp4",
+	quality: "high",
+	fps: { numerator: 30, denominator: 1 },
+	includeAudio: true,
+};
+
+function buildFixture({
+	elementPatch,
+	extraElement = false,
+}: {
+	elementPatch?: Partial<VideoElement>;
+	extraElement?: boolean;
+} = {}): {
+	tracks: SceneTracks;
+	mediaAssets: MediaAsset[];
+} {
+	const element: VideoElement = {
+		id: "video-1",
+		type: "video",
+		mediaId: "media-1",
+		name: "Long video",
+		duration: EIGHT_HOURS,
+		startTime: 0,
+		trimStart: 0,
+		trimEnd: 0,
+		sourceDuration: EIGHT_HOURS,
+		muted: false,
+		isSourceAudioEnabled: true,
+		hidden: false,
+		transform: {
+			scaleX: 1,
+			scaleY: 1,
+			position: { x: 0, y: 0 },
+			rotate: 0,
+		},
+		opacity: 1,
+		blendMode: "normal",
+		volume: 0,
+		...elementPatch,
+	};
+	const tracks: SceneTracks = {
+		main: {
+			id: "main",
+			name: "Main",
+			type: "video",
+			muted: false,
+			hidden: false,
+			elements: extraElement
+				? [
+						element,
+						{
+							...element,
+							id: "video-2",
+							startTime: EIGHT_HOURS,
+						},
+					]
+				: [element],
+		},
+		overlay: [],
+		audio: [],
+	};
+	const mediaAssets: MediaAsset[] = [
+		{
+			id: "media-1",
+			name: "Long video",
+			type: "video",
+			file: new File([new Uint8Array(1)], "long.mp4", { type: "video/mp4" }),
+			width: 1920,
+			height: 1080,
+			fps: 30,
+			hasAudio: true,
+		},
+	];
+
+	return { tracks, mediaAssets };
+}
+
+function selectCandidate({
+	elementPatch,
+	extraElement,
+}: {
+	elementPatch?: Partial<VideoElement>;
+	extraElement?: boolean;
+} = {}) {
+	const { tracks, mediaAssets } = buildFixture({ elementPatch, extraElement });
+	return getFastExportCandidate({
+		tracks,
+		mediaAssets,
+		canvasSize: { width: 1920, height: 1080 },
+		duration: EIGHT_HOURS,
+		options: OPTIONS,
+		ticksPerSecond: TICKS_PER_SECOND,
+	});
+}
+
+describe("getFastExportCandidate", () => {
+	test("selects packet-copy for one identity video, including an 8-hour source", () => {
+		const candidate = selectCandidate();
+		expect(candidate).not.toBeNull();
+		expect(candidate?.trimEndSeconds).toBe(8 * 60 * 60);
+		expect(candidate?.copyAudio).toBe(true);
+	});
+
+	test("falls back when the source has a non-zero trim start", () => {
+		expect(
+			selectCandidate({ elementPatch: { trimStart: TICKS_PER_SECOND } }),
+		).toBeNull();
+	});
+
+	test("falls back for effects, transforms, retiming, and multiple clips", () => {
+		expect(
+			selectCandidate({ elementPatch: { effects: [{} as never] } }),
+		).toBeNull();
+		expect(
+			selectCandidate({
+				elementPatch: {
+					transform: {
+						scaleX: 1.1,
+						scaleY: 1,
+						position: { x: 0, y: 0 },
+						rotate: 0,
+					},
+				},
+			}),
+		).toBeNull();
+		expect(
+			selectCandidate({ elementPatch: { retime: { rate: 2 } } }),
+		).toBeNull();
+		expect(selectCandidate({ extraElement: true })).toBeNull();
+	});
+
+	test("falls back when audible source volume would require mixing", () => {
+		expect(selectCandidate({ elementPatch: { volume: -6 } })).toBeNull();
+	});
+});
+
+describe("compatibility buffer guard", () => {
+	test("rejects an estimated 8-hour encoded export before allocating a buffer", () => {
+		const estimatedBytes = estimateEncodedExportBytes({
+			duration: EIGHT_HOURS,
+			quality: "high",
+			includeAudio: true,
+			ticksPerSecond: TICKS_PER_SECOND,
+		});
+		expect(exceedsCompatibilityBufferLimit({ estimatedBytes })).toBe(true);
+	});
+
+	test("rejects an 8-hour fallback audio mix before creating an AudioBuffer", () => {
+		const estimatedBytes = estimateTimelineAudioBufferBytes({
+			duration: EIGHT_HOURS,
+			ticksPerSecond: TICKS_PER_SECOND,
+		});
+		expect(estimatedBytes).toBe(10_160_640_000);
+		expect(exceedsFallbackAudioBufferLimit({ estimatedBytes })).toBe(true);
+	});
+});

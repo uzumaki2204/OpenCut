@@ -1,0 +1,127 @@
+import type { StreamTargetChunk } from "mediabunny";
+import type { ExportDestination } from "@/lib/export";
+import { EXPORT_TEXT } from "@/lib/export/language";
+
+type ShowSaveFilePicker = (options: {
+	suggestedName: string;
+	types: Array<{
+		description: string;
+		accept: Record<string, string[]>;
+	}>;
+}) => Promise<FileSystemFileHandle>;
+
+type WindowWithSaveFilePicker = Window & {
+	showSaveFilePicker?: ShowSaveFilePicker;
+};
+
+export async function createExportDestination({
+	filename,
+	mimeType,
+	extension,
+	allowBufferFallback = true,
+}: {
+	filename: string;
+	mimeType: string;
+	extension: string;
+	allowBufferFallback?: boolean;
+}): Promise<ExportDestination | null> {
+	const showSaveFilePicker = (window as WindowWithSaveFilePicker)
+		.showSaveFilePicker;
+	if (!showSaveFilePicker) {
+		if (!allowBufferFallback) {
+			throw new Error(EXPORT_TEXT.errors.directExportRequiresFilePicker);
+		}
+		return { kind: "buffer" };
+	}
+
+	try {
+		const safeFilename =
+			filename.replace(/[<>:"/\\|?*]/g, "-").trim() ||
+			`${EXPORT_TEXT.ui.defaultFilename}${extension}`;
+		const fileHandle = await showSaveFilePicker.call(window, {
+			suggestedName: safeFilename,
+			types: [
+				{
+					description: EXPORT_TEXT.ui.fileTypeVideo,
+					accept: { [mimeType]: [extension] },
+				},
+			],
+		});
+		const fileStream = await fileHandle.createWritable();
+		let settled = false;
+		const writable = new WritableStream<StreamTargetChunk>({
+			write: (chunk) => fileStream.write(chunk),
+			// mediabunny closes its wrapper before the app commits or aborts the file.
+			close: () => undefined,
+		});
+
+		return {
+			kind: "stream",
+			writable,
+			complete: async () => {
+				if (settled) return;
+				settled = true;
+				await fileStream.close();
+			},
+			cancel: async () => {
+				if (settled) return;
+				settled = true;
+				await fileStream.abort();
+			},
+		};
+	} catch (error) {
+		if (error instanceof DOMException && error.name === "AbortError") {
+			return null;
+		}
+		throw error;
+	}
+}
+
+export function downloadBlob({
+	blob,
+	filename,
+}: {
+	blob: Blob;
+	filename: string;
+}): void {
+	const url = URL.createObjectURL(blob);
+	const anchor = document.createElement("a");
+	anchor.href = url;
+	anchor.download = filename;
+	document.body.appendChild(anchor);
+	anchor.click();
+	document.body.removeChild(anchor);
+	URL.revokeObjectURL(url);
+}
+
+export function findScrollParent({
+	element,
+}: {
+	element: HTMLElement;
+}): HTMLElement | null {
+	let parent = element.parentElement;
+	while (parent) {
+		const { overflow, overflowX } = window.getComputedStyle(parent);
+		if (/auto|scroll/.test(overflow + overflowX)) return parent;
+		parent = parent.parentElement;
+	}
+	return null;
+}
+
+export function isTypableDOMElement({
+	element,
+}: {
+	element: HTMLElement;
+}): boolean {
+	if (element.isContentEditable) return true;
+
+	if (element.tagName === "INPUT") {
+		return !(element as HTMLInputElement).disabled;
+	}
+
+	if (element.tagName === "TEXTAREA") {
+		return !(element as HTMLTextAreaElement).disabled;
+	}
+
+	return false;
+}

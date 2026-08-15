@@ -1,0 +1,44 @@
+export const EXPORT_LANGUAGE = {
+	en: {
+		ui: {
+			button: "Export",
+			exportProject: "Export project",
+			exportingProject: "Exporting project",
+			format: "Format",
+			mp4: "MP4 (H.264) - Better compatibility",
+			webm: "WebM (VP9) - Smaller file size",
+			quality: "Quality",
+			qualityLow: "Low - Smallest file size",
+			qualityMedium: "Medium - Balanced",
+			qualityHigh: "High - Recommended",
+			qualityVeryHigh: "Very high - Largest file size",
+			audio: "Audio",
+			includeAudio: "Include audio in export",
+			cancel: "Cancel",
+			exportFailed: "Export failed",
+			copy: "Copy",
+			retry: "Retry",
+			progressComplete: "100%",
+			fileTypeVideo: "Video",
+			defaultFilename: "video",
+		},
+		errors: {
+			noActiveProject: "No active project",
+			emptyProject: "Project is empty",
+			unknown: "Unknown error occurred",
+			unknownExport: "Unknown export error",
+			missingBuffer: "Export failed to produce a buffer",
+			missingStreamDestination: "Export stream destination is unavailable",
+			filePicker: "Could not open the export file destination",
+			compatibilityBufferTooLarge:
+				"This browser cannot stream a large export directly to disk. Use a Chromium-based browser with file saving support, or export a shorter project.",
+			fallbackAudioTooLarge:
+				"This project requires an audio mixdown that is too large for browser memory. Remove complex audio edits or export without audio to avoid a browser crash.",
+		},
+		diagnostics: {
+			exportFailed: "Export failed:",
+		},
+	},
+} as const;
+
+export const EXPORT_TEXT = EXPORT_LANGUAGE.en;

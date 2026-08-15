@@ -1,0 +1,183 @@
+import type { FrameRate } from "opencut-wasm";
+import type { ExportOptions, ExportQuality } from ".";
+import type { MediaAsset } from "@/lib/media/types";
+import type { TCanvasSize } from "@/lib/project/types";
+import type { SceneTracks, VideoElement } from "@/lib/timeline";
+import { frameRateToFloat } from "@/lib/fps/utils";
+
+const MAX_COMPATIBILITY_BUFFER_BYTES = 512 * 1024 * 1024;
+const MAX_FALLBACK_AUDIO_BUFFER_BYTES = 512 * 1024 * 1024;
+const ESTIMATED_VIDEO_BITRATES: Record<ExportQuality, number> = {
+	low: 2_000_000,
+	medium: 5_000_000,
+	high: 10_000_000,
+	very_high: 20_000_000,
+};
+const ESTIMATED_AUDIO_BITRATE = 192_000;
+
+export interface FastExportCandidate {
+	element: VideoElement;
+	mediaAsset: MediaAsset;
+	trimEndSeconds: number;
+	copyAudio: boolean;
+}
+
+function hasAnimations({ element }: { element: VideoElement }): boolean {
+	return (
+		!!element.animations &&
+		(Object.keys(element.animations.bindings).length > 0 ||
+			Object.keys(element.animations.channels).length > 0)
+	);
+}
+
+function hasIdentityTransform({ element }: { element: VideoElement }): boolean {
+	return (
+		element.transform.scaleX === 1 &&
+		element.transform.scaleY === 1 &&
+		element.transform.position.x === 0 &&
+		element.transform.position.y === 0 &&
+		element.transform.rotate === 0
+	);
+}
+
+function hasExactlyOneTimelineElement({
+	tracks,
+}: {
+	tracks: SceneTracks;
+}): boolean {
+	const elementCount = [tracks.main, ...tracks.overlay, ...tracks.audio].reduce(
+		(count, track) => count + track.elements.length,
+		0,
+	);
+	return elementCount === 1;
+}
+
+function frameRatesMatch({
+	exportFps,
+	mediaFps,
+}: {
+	exportFps?: FrameRate;
+	mediaFps?: number;
+}): boolean {
+	if (!exportFps || !mediaFps) return true;
+	return Math.abs(frameRateToFloat(exportFps) - mediaFps) < 0.01;
+}
+
+export function getFastExportCandidate({
+	tracks,
+	mediaAssets,
+	canvasSize,
+	duration,
+	options,
+	ticksPerSecond,
+}: {
+	tracks: SceneTracks;
+	mediaAssets: MediaAsset[];
+	canvasSize: TCanvasSize;
+	duration: number;
+	options: ExportOptions;
+	ticksPerSecond: number;
+}): FastExportCandidate | null {
+	if (!hasExactlyOneTimelineElement({ tracks }) || tracks.main.hidden)
+		return null;
+
+	const element = tracks.main.elements[0];
+	if (!element || element.type !== "video" || element.hidden) return null;
+	if (element.startTime !== 0 || element.duration !== duration) return null;
+
+	// mediabunny 1.x re-encodes a non-zero trim start to keep the first frame exact.
+	if (element.trimStart !== 0) return null;
+	if (element.retime && element.retime.rate !== 1) return null;
+	if (!hasIdentityTransform({ element })) return null;
+	if (element.opacity !== 1 || (element.blendMode ?? "normal") !== "normal") {
+		return null;
+	}
+	if (hasAnimations({ element })) return null;
+	if ((element.effects?.length ?? 0) > 0 || (element.masks?.length ?? 0) > 0) {
+		return null;
+	}
+
+	const mediaAsset = mediaAssets.find((asset) => asset.id === element.mediaId);
+	if (!mediaAsset || mediaAsset.type !== "video") return null;
+	if (
+		mediaAsset.width !== canvasSize.width ||
+		mediaAsset.height !== canvasSize.height
+	) {
+		return null;
+	}
+	if (!frameRatesMatch({ exportFps: options.fps, mediaFps: mediaAsset.fps })) {
+		return null;
+	}
+
+	const sourceAudioIsAudible =
+		!tracks.main.muted &&
+		element.muted !== true &&
+		element.isSourceAudioEnabled !== false;
+	if (
+		options.includeAudio &&
+		sourceAudioIsAudible &&
+		(element.volume ?? 0) !== 0
+	) {
+		return null;
+	}
+
+	return {
+		element,
+		mediaAsset,
+		trimEndSeconds: (element.trimStart + element.duration) / ticksPerSecond,
+		copyAudio: !!options.includeAudio && sourceAudioIsAudible,
+	};
+}
+
+export function estimateEncodedExportBytes({
+	duration,
+	quality,
+	includeAudio,
+	ticksPerSecond,
+}: {
+	duration: number;
+	quality: ExportQuality;
+	includeAudio: boolean;
+	ticksPerSecond: number;
+}): number {
+	const durationSeconds = duration / ticksPerSecond;
+	const bitsPerSecond =
+		ESTIMATED_VIDEO_BITRATES[quality] +
+		(includeAudio ? ESTIMATED_AUDIO_BITRATE : 0);
+	return (durationSeconds * bitsPerSecond) / 8;
+}
+
+export function exceedsCompatibilityBufferLimit({
+	estimatedBytes,
+}: {
+	estimatedBytes: number;
+}): boolean {
+	return estimatedBytes > MAX_COMPATIBILITY_BUFFER_BYTES;
+}
+
+export function estimateTimelineAudioBufferBytes({
+	duration,
+	ticksPerSecond,
+	sampleRate = 44_100,
+	numberOfChannels = 2,
+}: {
+	duration: number;
+	ticksPerSecond: number;
+	sampleRate?: number;
+	numberOfChannels?: number;
+}): number {
+	const durationSeconds = duration / ticksPerSecond;
+	return (
+		Math.ceil(durationSeconds * sampleRate) *
+		numberOfChannels *
+		Float32Array.BYTES_PER_ELEMENT
+	);
+}
+
+export function exceedsFallbackAudioBufferLimit({
+	estimatedBytes,
+}: {
+	estimatedBytes: number;
+}): boolean {
+	return estimatedBytes > MAX_FALLBACK_AUDIO_BUFFER_BYTES;
+}

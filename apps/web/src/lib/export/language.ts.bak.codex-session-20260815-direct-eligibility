@@ -1,0 +1,60 @@
+export const EXPORT_LANGUAGE = {
+	en: {
+		ui: {
+			button: "Export",
+			exportProject: "Export project",
+			exportingProject: "Exporting project",
+			format: "Format",
+			mp4: "MP4 (H.264) - Better compatibility",
+			webm: "WebM (VP9) - Smaller file size",
+			quality: "Quality",
+			qualityDirect: "Direct export - Fastest, no encoding",
+			qualityLow: "Low - Smallest file size",
+			qualityMedium: "Medium - Balanced",
+			qualityHigh: "High - Recommended",
+			qualityVeryHigh: "Very high - Largest file size",
+			audio: "Audio",
+			includeAudio: "Include audio in export",
+			cancel: "Cancel",
+			exportFailed: "Export failed",
+			copy: "Copy",
+			retry: "Retry",
+			progressComplete: "100%",
+			fileTypeVideo: "Video",
+			defaultFilename: "video",
+			directFilenameSuffix: "-direct",
+		},
+		errors: {
+			noActiveProject: "No active project",
+			emptyProject: "Project is empty",
+			unknown: "Unknown error occurred",
+			unknownExport: "Unknown export error",
+			missingBuffer: "Export failed to produce a buffer",
+			missingStreamDestination: "Export stream destination is unavailable",
+			filePicker: "Could not open the export file destination",
+			directExportRequiresFilePicker:
+				"Direct export requires direct file saving. Use a Chromium-based browser with file-picker support.",
+			directExportUnavailable:
+				"Direct export only works with one unchanged video whose source format, resolution, frame rate, duration, and audio settings match the project.",
+			directExportCannotOverwriteSource:
+				"Direct export cannot overwrite the source video. Choose a different filename or folder.",
+			directSourceUnreadable:
+				"The source video could not be read. Wait for the import to finish, then retry and save to a different filename.",
+			compatibilityBufferTooLarge:
+				"This browser cannot stream a large export directly to disk. Use a Chromium-based browser with file saving support, or export a shorter project.",
+			fallbackAudioTooLarge:
+				"This project requires an audio mixdown that is too large for browser memory. Remove complex audio edits or export without audio to avoid a browser crash.",
+		},
+		diagnostics: {
+			exportFailed: "Export failed:",
+			strategyStarted: "Export strategy started:",
+			strategyCompleted: "Export strategy completed:",
+			strategyUnavailable: "Export strategy unavailable:",
+			strategyCancelled: "Export strategy cancelled:",
+			persistedSourceUnavailable:
+				"Stored source snapshot is unavailable; using the imported file reference:",
+		},
+	},
+} as const;
+
+export const EXPORT_TEXT = EXPORT_LANGUAGE.en;

@@ -1,0 +1,146 @@
+use std::time::Duration;
+
+use opencut_direct_export::DirectCopyError;
+
+pub struct DesktopText {
+    pub app_name: &'static str,
+    pub native_badge: &'static str,
+    pub eyebrow: &'static str,
+    pub title: &'static str,
+    pub description: &'static str,
+    pub source_label: &'static str,
+    pub source_empty: &'static str,
+    pub source_picker_title: &'static str,
+    pub choose_source: &'static str,
+    pub destination_label: &'static str,
+    pub destination_empty: &'static str,
+    pub destination_picker_title: &'static str,
+    pub choose_destination: &'static str,
+    pub video_filter: &'static str,
+    pub ready: &'static str,
+    pub ready_detail: &'static str,
+    pub copying: &'static str,
+    pub cancelling: &'static str,
+    pub cancelled: &'static str,
+    pub cancelled_detail: &'static str,
+    pub completed: &'static str,
+    pub start_export: &'static str,
+    pub cancel: &'static str,
+    pub reveal_file: &'static str,
+    pub exact_copy: &'static str,
+    pub exact_copy_detail: &'static str,
+    pub source_missing: &'static str,
+    pub source_not_file: &'static str,
+    pub same_path: &'static str,
+    pub copy_failed: &'static str,
+    pub diagnostic_copy_failed: &'static str,
+    pub window_open_failed: &'static str,
+    pub default_filename: &'static str,
+    pub default_extension: &'static str,
+    pub output_suffix: &'static str,
+    pub empty: &'static str,
+}
+
+pub const TEXT: DesktopText = DesktopText {
+    app_name: "OpenCut",
+    native_badge: "WINDOWS NATIVE",
+    eyebrow: "DIRECT EXPORT",
+    title: "Copy the original video at disk speed",
+    description: "Choose a source and destination. OpenCut copies every byte directly without encoding, remuxing, uploading, or loading the video into memory.",
+    source_label: "SOURCE VIDEO",
+    source_empty: "No source video selected",
+    source_picker_title: "Choose source video",
+    choose_source: "Choose video",
+    destination_label: "DESTINATION",
+    destination_empty: "No destination selected",
+    destination_picker_title: "Save direct copy",
+    choose_destination: "Choose destination",
+    video_filter: "Video",
+    ready: "Ready for native copy",
+    ready_detail: "Select both paths, then start Direct Export.",
+    copying: "Copying original bytes",
+    cancelling: "Stopping copy",
+    cancelled: "Export cancelled",
+    cancelled_detail: "The incomplete destination file was removed.",
+    completed: "Direct Export completed",
+    start_export: "Start Direct Export",
+    cancel: "Cancel",
+    reveal_file: "Show file",
+    exact_copy: "Byte-for-byte output",
+    exact_copy_detail: "This mode intentionally ignores timeline edits, trimming, effects, resolution, quality, frame rate, and audio settings. The destination is an exact copy of the selected source.",
+    source_missing: "The source file no longer exists. Choose it again.",
+    source_not_file: "The selected source is not a readable file.",
+    same_path: "Source and destination must be different files.",
+    copy_failed: "Windows could not copy the file",
+    diagnostic_copy_failed: "Native Direct Export failed",
+    window_open_failed: "OpenCut could not open the desktop window",
+    default_filename: "video",
+    default_extension: "mp4",
+    output_suffix: "direct",
+    empty: "",
+};
+
+pub fn progress_summary(bytes_copied: u64, total_bytes: u64, bytes_per_second: f64) -> String {
+    let percent = if total_bytes == 0 {
+        100.0
+    } else {
+        bytes_copied as f64 / total_bytes as f64 * 100.0
+    };
+    format!(
+        "{percent:.1}%  |  {} / {}  |  {}/s",
+        format_bytes(bytes_copied),
+        format_bytes(total_bytes),
+        format_bytes(bytes_per_second.max(0.0) as u64)
+    )
+}
+
+pub fn completed_summary(bytes: u64, elapsed: Duration) -> String {
+    let speed = if elapsed.is_zero() {
+        0
+    } else {
+        (bytes as f64 / elapsed.as_secs_f64()) as u64
+    };
+    format!(
+        "{} copied in {} at {}/s",
+        format_bytes(bytes),
+        format_duration(elapsed),
+        format_bytes(speed)
+    )
+}
+
+pub fn error_message(error: &DirectCopyError) -> String {
+    match error {
+        DirectCopyError::SourceNotFound(_) => TEXT.source_missing.to_owned(),
+        DirectCopyError::SourceIsNotFile(_) => TEXT.source_not_file.to_owned(),
+        DirectCopyError::SamePath => TEXT.same_path.to_owned(),
+        DirectCopyError::Cancelled => TEXT.cancelled_detail.to_owned(),
+        DirectCopyError::Io(error) => format!("{}: {error}", TEXT.copy_failed),
+    }
+}
+
+pub fn format_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+
+    if unit == 0 {
+        format!("{bytes} {}", UNITS[unit])
+    } else {
+        format!("{value:.2} {}", UNITS[unit])
+    }
+}
+
+fn format_duration(duration: Duration) -> String {
+    let seconds = duration.as_secs_f64();
+    if seconds < 60.0 {
+        format!("{seconds:.1}s")
+    } else {
+        let minutes = (seconds / 60.0).floor() as u64;
+        let remaining_seconds = seconds - minutes as f64 * 60.0;
+        format!("{minutes}m {remaining_seconds:.0}s")
+    }
+}

@@ -1,0 +1,516 @@
+import { describe, expect, test } from "bun:test";
+import type { ExportOptions } from "@/lib/export";
+import {
+	assessDirectExport,
+	estimateEncodedExportBytes,
+	estimateTimelineAudioBufferBytes,
+	exceedsCompatibilityBufferLimit,
+	exceedsFallbackAudioBufferLimit,
+	getDirectCopyCandidate,
+	getFastExportCandidate,
+	isDirectExportRequested,
+} from "@/lib/export/strategy";
+import type { MediaAsset } from "@/lib/media/types";
+import type { SceneTracks, VideoElement } from "@/lib/timeline";
+
+const TICKS_PER_SECOND = 120_000;
+const EIGHT_HOURS = 8 * 60 * 60 * TICKS_PER_SECOND;
+const OPTIONS: ExportOptions = {
+	format: "mp4",
+	quality: "high",
+	fps: { numerator: 30, denominator: 1 },
+	includeAudio: true,
+};
+const DIRECT_OPTIONS: ExportOptions = { ...OPTIONS, quality: "direct" };
+
+function buildFixture({
+	elementPatch,
+	extraElement = false,
+	mediaAssetPatch,
+}: {
+	elementPatch?: Partial<VideoElement>;
+	extraElement?: boolean;
+	mediaAssetPatch?: Partial<MediaAsset>;
+} = {}): {
+	tracks: SceneTracks;
+	mediaAssets: MediaAsset[];
+} {
+	const element: VideoElement = {
+		id: "video-1",
+		type: "video",
+		mediaId: "media-1",
+		name: "Long video",
+		duration: EIGHT_HOURS,
+		startTime: 0,
+		trimStart: 0,
+		trimEnd: 0,
+		sourceDuration: EIGHT_HOURS,
+		muted: false,
+		isSourceAudioEnabled: true,
+		hidden: false,
+		transform: {
+			scaleX: 1,
+			scaleY: 1,
+			position: { x: 0, y: 0 },
+			rotate: 0,
+		},
+		opacity: 1,
+		blendMode: "normal",
+		volume: 0,
+		...elementPatch,
+	};
+	const tracks: SceneTracks = {
+		main: {
+			id: "main",
+			name: "Main",
+			type: "video",
+			muted: false,
+			hidden: false,
+			elements: extraElement
+				? [
+						element,
+						{
+							...element,
+							id: "video-2",
+							startTime: EIGHT_HOURS,
+						},
+					]
+				: [element],
+		},
+		overlay: [],
+		audio: [],
+	};
+	const mediaAssets: MediaAsset[] = [
+		{
+			id: "media-1",
+			name: "Long video",
+			type: "video",
+			file: new File([new Uint8Array(1)], "long.mp4", { type: "video/mp4" }),
+			width: 1920,
+			height: 1080,
+			fps: 30,
+			hasAudio: true,
+			...mediaAssetPatch,
+		},
+	];
+
+	return { tracks, mediaAssets };
+}
+
+function selectCandidate({
+	elementPatch,
+	extraElement,
+	options = OPTIONS,
+}: {
+	elementPatch?: Partial<VideoElement>;
+	extraElement?: boolean;
+	options?: ExportOptions;
+} = {}) {
+	const { tracks, mediaAssets } = buildFixture({ elementPatch, extraElement });
+	return getFastExportCandidate({
+		tracks,
+		mediaAssets,
+		canvasSize: { width: 1920, height: 1080 },
+		duration: EIGHT_HOURS,
+		options,
+		ticksPerSecond: TICKS_PER_SECOND,
+	});
+}
+
+function selectDirectCopyCandidate({
+	elementPatch,
+	extraElement,
+	mediaAssetPatch,
+	options = OPTIONS,
+	canvasSize = { width: 1920, height: 1080 },
+}: {
+	elementPatch?: Partial<VideoElement>;
+	extraElement?: boolean;
+	mediaAssetPatch?: Partial<MediaAsset>;
+	options?: ExportOptions;
+	canvasSize?: { width: number; height: number };
+} = {}) {
+	const { tracks, mediaAssets } = buildFixture({
+		elementPatch,
+		extraElement,
+		mediaAssetPatch,
+	});
+	return getDirectCopyCandidate({
+		tracks,
+		mediaAssets,
+		canvasSize,
+		duration: EIGHT_HOURS,
+		options,
+		ticksPerSecond: TICKS_PER_SECOND,
+	});
+}
+
+describe("getDirectCopyCandidate", () => {
+	test("marks Direct export as strict direct-copy mode", () => {
+		expect(isDirectExportRequested(DIRECT_OPTIONS)).toBe(true);
+		expect(isDirectExportRequested(OPTIONS)).toBe(false);
+	});
+
+	test("selects byte-copy when the Direct export preset is requested", () => {
+		expect(
+			selectDirectCopyCandidate({ options: DIRECT_OPTIONS }),
+		).not.toBeNull();
+	});
+
+	test("ignores canvas and frame-rate settings for explicit Direct export", () => {
+		const options: ExportOptions = {
+			...DIRECT_OPTIONS,
+			fps: { numerator: 60, denominator: 1 },
+		};
+		expect(
+			selectDirectCopyCandidate({
+				options,
+				canvasSize: { width: 1920, height: 1080 },
+				mediaAssetPatch: { width: 854, height: 480, fps: 30 },
+			}),
+		).not.toBeNull();
+	});
+
+	test("preserves source audio even when the previous audio option was disabled", () => {
+		expect(
+			selectDirectCopyCandidate({
+				options: { ...DIRECT_OPTIONS, includeAudio: false },
+			}),
+		).not.toBeNull();
+	});
+
+	test("copies the source even when timeline duration and trim differ", () => {
+		expect(
+			selectDirectCopyCandidate({
+				options: DIRECT_OPTIONS,
+				elementPatch: {
+					trimStart: TICKS_PER_SECOND,
+					trimEnd: TICKS_PER_SECOND,
+					sourceDuration: EIGHT_HOURS + 2 * TICKS_PER_SECOND,
+				},
+			}),
+		).not.toBeNull();
+	});
+
+	test("copies the source while ignoring visual, speed, and audio edits", () => {
+		expect(
+			selectDirectCopyCandidate({
+				options: DIRECT_OPTIONS,
+				elementPatch: {
+					retime: { rate: 2 },
+					effects: [{} as never],
+					opacity: 0.5,
+					muted: true,
+					volume: -6,
+				},
+			}),
+		).not.toBeNull();
+	});
+
+	test("copies one source after the video is split into multiple elements", () => {
+		const { tracks, mediaAssets } = buildFixture();
+		const sourceElement = tracks.main.elements[0];
+		if (!sourceElement || sourceElement.type !== "video") {
+			throw new Error("Expected a video fixture element");
+		}
+		const splitTime = EIGHT_HOURS / 2;
+		tracks.main.elements = [
+			{
+				...sourceElement,
+				duration: splitTime,
+				trimEnd: splitTime,
+			},
+			{
+				...sourceElement,
+				id: "video-2",
+				startTime: splitTime,
+				duration: splitTime,
+				trimStart: splitTime,
+			},
+		];
+
+		const assessment = assessDirectExport({
+			tracks,
+			mediaAssets,
+			options: DIRECT_OPTIONS,
+		});
+
+		expect(assessment.eligible).toBe(true);
+		if (assessment.eligible) {
+			expect(assessment.candidate.kind).toBe("copy");
+			if (assessment.candidate.kind !== "copy") return;
+			expect(assessment.candidate.mediaAsset.id).toBe("media-1");
+		}
+	});
+
+	test("selects byte-copy for an unchanged 8-hour source", () => {
+		expect(selectDirectCopyCandidate()).not.toBeNull();
+	});
+
+	test("uses original metadata name after OPFS replaces the file name", () => {
+		expect(
+			selectDirectCopyCandidate({
+				mediaAssetPatch: {
+					name: "long.mp4",
+					file: new File([new Uint8Array(1)], "media-uuid", {
+						type: "video/mp4",
+					}),
+				},
+			}),
+		).not.toBeNull();
+	});
+
+	test("rejects trims and source duration changes", () => {
+		expect(
+			selectDirectCopyCandidate({
+				elementPatch: { trimStart: TICKS_PER_SECOND },
+			}),
+		).toBeNull();
+		expect(
+			selectDirectCopyCandidate({
+				elementPatch: { trimEnd: TICKS_PER_SECOND },
+			}),
+		).toBeNull();
+		expect(
+			selectDirectCopyCandidate({
+				elementPatch: { sourceDuration: EIGHT_HOURS + TICKS_PER_SECOND },
+			}),
+		).toBeNull();
+	});
+
+	test("rejects visual, timing, and multi-clip edits", () => {
+		expect(
+			selectDirectCopyCandidate({ elementPatch: { retime: { rate: 2 } } }),
+		).toBeNull();
+		expect(
+			selectDirectCopyCandidate({ elementPatch: { effects: [{} as never] } }),
+		).toBeNull();
+		expect(
+			selectDirectCopyCandidate({ elementPatch: { masks: [{} as never] } }),
+		).toBeNull();
+		expect(
+			selectDirectCopyCandidate({ elementPatch: { opacity: 0.5 } }),
+		).toBeNull();
+		expect(
+			selectDirectCopyCandidate({ elementPatch: { blendMode: "multiply" } }),
+		).toBeNull();
+		expect(
+			selectDirectCopyCandidate({
+				elementPatch: {
+					transform: {
+						scaleX: 1.1,
+						scaleY: 1,
+						position: { x: 0, y: 0 },
+						rotate: 0,
+					},
+				},
+			}),
+		).toBeNull();
+		expect(
+			selectDirectCopyCandidate({
+				elementPatch: {
+					animations: {
+						bindings: { opacity: "opacity-channel" },
+						channels: { "opacity-channel": {} },
+					} as never,
+				},
+			}),
+		).toBeNull();
+		expect(selectDirectCopyCandidate({ extraElement: true })).toBeNull();
+	});
+
+	test("rejects source audio changes", () => {
+		expect(
+			selectDirectCopyCandidate({ elementPatch: { volume: -6 } }),
+		).toBeNull();
+		expect(
+			selectDirectCopyCandidate({ elementPatch: { muted: true } }),
+		).toBeNull();
+		expect(
+			selectDirectCopyCandidate({
+				elementPatch: { isSourceAudioEnabled: false },
+			}),
+		).toBeNull();
+		expect(
+			selectDirectCopyCandidate({
+				options: { ...OPTIONS, includeAudio: false },
+			}),
+		).toBeNull();
+	});
+
+	test("falls through to remux when the requested container differs", () => {
+		const options: ExportOptions = { ...OPTIONS, format: "webm" };
+		expect(selectDirectCopyCandidate({ options })).toBeNull();
+		expect(selectCandidate({ options })).not.toBeNull();
+	});
+
+	test("reports why an explicit Direct export is rejected", () => {
+		const { tracks, mediaAssets } = buildFixture();
+		const assessment = assessDirectExport({
+			tracks,
+			mediaAssets,
+			options: { ...DIRECT_OPTIONS, format: "webm" },
+		});
+		expect(assessment).toEqual({
+			eligible: false,
+			reason: "formatMismatch",
+		});
+	});
+
+	test("selects Direct Join when timeline clips use different sources", () => {
+		const { tracks, mediaAssets } = buildFixture({ extraElement: true });
+		const secondElement = tracks.main.elements[1];
+		if (!secondElement || secondElement.type !== "video") {
+			throw new Error("Expected a second video fixture element");
+		}
+		secondElement.mediaId = "media-2";
+		mediaAssets.push({
+			...mediaAssets[0],
+			id: "media-2",
+			name: "Different video.mp4",
+			file: new File([new Uint8Array(2)], "different.mp4", {
+				type: "video/mp4",
+			}),
+		});
+
+		const assessment = assessDirectExport({
+			tracks,
+			mediaAssets,
+			options: DIRECT_OPTIONS,
+		});
+
+		expect(assessment.eligible).toBe(true);
+		if (assessment.eligible) {
+			expect(assessment.candidate.kind).toBe("join");
+			if (assessment.candidate.kind !== "join") return;
+			expect(assessment.candidate.clips).toHaveLength(2);
+			expect(assessment.candidate.totalSourceBytes).toBe(3);
+		}
+	});
+
+	test("accepts duplicate imports of the same source with different media IDs", () => {
+		const { tracks, mediaAssets } = buildFixture({ extraElement: true });
+		const secondElement = tracks.main.elements[1];
+		const originalMediaAsset = mediaAssets[0];
+		if (
+			!secondElement ||
+			secondElement.type !== "video" ||
+			!originalMediaAsset
+		) {
+			throw new Error("Expected video fixture data");
+		}
+		secondElement.mediaId = "media-2";
+		originalMediaAsset.name = "long.mp4";
+		mediaAssets.push({
+			...originalMediaAsset,
+			id: "media-2",
+			file: new File([new Uint8Array(1)], "different-opfs-id", {
+				type: "video/mp4",
+			}),
+		});
+
+		const assessment = assessDirectExport({
+			tracks,
+			mediaAssets,
+			options: DIRECT_OPTIONS,
+		});
+
+		expect(assessment.eligible).toBe(true);
+		if (assessment.eligible) {
+			expect(assessment.candidate.kind).toBe("copy");
+			if (assessment.candidate.kind !== "copy") return;
+			expect(assessment.candidate.mediaAsset.id).toBe("media-1");
+		}
+	});
+
+	test("rejects Direct Join when clips have gaps or visual edits", () => {
+		const { tracks, mediaAssets } = buildFixture({ extraElement: true });
+		const secondElement = tracks.main.elements[1];
+		const firstMediaAsset = mediaAssets[0];
+		if (!secondElement || secondElement.type !== "video" || !firstMediaAsset) {
+			throw new Error("Expected video fixture data");
+		}
+		secondElement.mediaId = "media-2";
+		secondElement.startTime += TICKS_PER_SECOND;
+		mediaAssets.push({
+			...firstMediaAsset,
+			id: "media-2",
+			name: "Different video.mp4",
+			file: new File([new Uint8Array(2)], "different.mp4", {
+				type: "video/mp4",
+			}),
+		});
+
+		expect(
+			assessDirectExport({ tracks, mediaAssets, options: DIRECT_OPTIONS }),
+		).toEqual({ eligible: false, reason: "unsupportedTimeline" });
+
+		secondElement.startTime = EIGHT_HOURS;
+		secondElement.effects = [{} as never];
+		expect(
+			assessDirectExport({ tracks, mediaAssets, options: DIRECT_OPTIONS }),
+		).toEqual({ eligible: false, reason: "unsupportedTimeline" });
+	});
+});
+
+describe("getFastExportCandidate", () => {
+	test("selects packet-copy for one identity video, including an 8-hour source", () => {
+		const candidate = selectCandidate();
+		expect(candidate).not.toBeNull();
+		expect(candidate?.trimEndSeconds).toBe(8 * 60 * 60);
+		expect(candidate?.copyAudio).toBe(true);
+	});
+
+	test("falls back when the source has a non-zero trim start", () => {
+		expect(
+			selectCandidate({ elementPatch: { trimStart: TICKS_PER_SECOND } }),
+		).toBeNull();
+	});
+
+	test("falls back for effects, transforms, retiming, and multiple clips", () => {
+		expect(
+			selectCandidate({ elementPatch: { effects: [{} as never] } }),
+		).toBeNull();
+		expect(
+			selectCandidate({
+				elementPatch: {
+					transform: {
+						scaleX: 1.1,
+						scaleY: 1,
+						position: { x: 0, y: 0 },
+						rotate: 0,
+					},
+				},
+			}),
+		).toBeNull();
+		expect(
+			selectCandidate({ elementPatch: { retime: { rate: 2 } } }),
+		).toBeNull();
+		expect(selectCandidate({ extraElement: true })).toBeNull();
+	});
+
+	test("falls back when audible source volume would require mixing", () => {
+		expect(selectCandidate({ elementPatch: { volume: -6 } })).toBeNull();
+	});
+});
+
+describe("compatibility buffer guard", () => {
+	test("rejects an estimated 8-hour encoded export before allocating a buffer", () => {
+		const estimatedBytes = estimateEncodedExportBytes({
+			duration: EIGHT_HOURS,
+			quality: "high",
+			includeAudio: true,
+			ticksPerSecond: TICKS_PER_SECOND,
+		});
+		expect(exceedsCompatibilityBufferLimit({ estimatedBytes })).toBe(true);
+	});
+
+	test("rejects an 8-hour fallback audio mix before creating an AudioBuffer", () => {
+		const estimatedBytes = estimateTimelineAudioBufferBytes({
+			duration: EIGHT_HOURS,
+			ticksPerSecond: TICKS_PER_SECOND,
+		});
+		expect(estimatedBytes).toBe(10_160_640_000);
+		expect(exceedsFallbackAudioBufferLimit({ estimatedBytes })).toBe(true);
+	});
+});
