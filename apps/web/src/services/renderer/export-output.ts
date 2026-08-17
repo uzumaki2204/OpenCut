@@ -7,6 +7,8 @@ import {
 import type { ExportDestination, ExportFormat } from "@/lib/export";
 import { EXPORT_TEXT } from "@/lib/export/language";
 
+const EXPORT_STREAM_CHUNK_SIZE = 32 * 1024 * 1024;
+
 export type ExportOutputTarget = BufferTarget | StreamTarget;
 export type ExportOutputResult =
 	| { kind: "saved" }
@@ -18,7 +20,10 @@ export function createExportOutputTarget({
 	destination: ExportDestination;
 }): ExportOutputTarget {
 	return destination.kind === "stream"
-		? new StreamTarget(destination.writable, { chunked: true })
+		? new StreamTarget(destination.writable, {
+				chunked: true,
+				chunkSize: EXPORT_STREAM_CHUNK_SIZE,
+			})
 		: new BufferTarget();
 }
 

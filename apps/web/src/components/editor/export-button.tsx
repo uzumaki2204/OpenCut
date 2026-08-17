@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { toast } from "sonner";
 import { TransitionTopIcon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
@@ -174,6 +175,21 @@ function ExportPopover({
 			onOpenChange(false);
 		}
 		if (result.success && result.kind === "saved") {
+			const snapWarnings = result.warnings ?? [];
+			if (snapWarnings.length > 0) {
+				const maxSnapMilliseconds = Math.max(
+					...snapWarnings.map(
+						(warning) =>
+							(warning.snapDeltaTicks / warning.ticksPerSecond) * 1_000,
+					),
+				);
+				toast.warning(
+					EXPORT_TEXT.warnings.directJoinKeyframeSnap({
+						clipCount: snapWarnings.length,
+						maxSnapMilliseconds,
+					}),
+				);
+			}
 			editor.project.clearExportState();
 			onOpenChange(false);
 		}
@@ -248,11 +264,23 @@ function ExportPopover({
 													}
 												}}
 											>
-												<div className="flex items-center space-x-2">
-													<RadioGroupItem value="direct" id="direct" />
-													<Label htmlFor="direct">
-														{EXPORT_TEXT.ui.qualityDirect}
-													</Label>
+												<div className="flex items-start space-x-2">
+													<RadioGroupItem
+														value="direct"
+														id="direct"
+														aria-describedby="direct-export-help"
+													/>
+													<div className="flex flex-col gap-0.5">
+														<Label htmlFor="direct">
+															{EXPORT_TEXT.ui.qualityDirect}
+														</Label>
+														<p
+															id="direct-export-help"
+															className="text-muted-foreground text-xs leading-snug"
+														>
+															{EXPORT_TEXT.ui.qualityDirectHelp}
+														</p>
+													</div>
 												</div>
 												<div className="flex items-center space-x-2">
 													<RadioGroupItem value="low" id="low" />

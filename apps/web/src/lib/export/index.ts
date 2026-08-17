@@ -28,22 +28,40 @@ export interface ExportOptions {
 	includeAudio?: boolean;
 }
 
+export interface ExportDestinationMetrics {
+	bytesWritten: number;
+	writeCalls: number;
+	flushCount: number;
+	writeElapsedMs: number;
+	closeElapsedMs: number;
+	maxFlushBytes: number;
+}
+
 export type ExportDestination =
 	| {
 			kind: "stream";
 			writable: WritableStream<StreamTargetChunk>;
 			complete: () => Promise<void>;
 			cancel: () => Promise<void>;
+			getMetrics?: () => ExportDestinationMetrics;
 	  }
 	| { kind: "buffer" };
 
 export type ExportStrategy = "direct-copy" | "direct-join" | "remux" | "encode";
+
+export type ExportWarning = {
+	code: "direct-join-keyframe-snap";
+	clipId: string;
+	snapDeltaTicks: number;
+	ticksPerSecond: number;
+};
 
 export type ExportResult =
 	| {
 			success: true;
 			kind: "saved";
 			strategy: ExportStrategy;
+			warnings?: ExportWarning[];
 	  }
 	| {
 			success: true;

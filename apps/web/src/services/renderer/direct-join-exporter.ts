@@ -15,11 +15,16 @@ import type {
 	InputVideoTrack,
 	VideoCodec,
 } from "mediabunny";
-import type { ExportDestination, ExportFormat } from "@/lib/export";
+import type {
+	ExportDestination,
+	ExportFormat,
+	ExportWarning,
+} from "@/lib/export";
 import type {
 	DirectJoinExportCandidate,
 	DirectJoinExportClip,
 } from "@/lib/export/strategy";
+import { EXPORT_TEXT } from "@/lib/export/language";
 import {
 	createExportOutputFormat,
 	createExportOutputTarget,
@@ -31,31 +36,36 @@ const MP4_VIDEO_CODECS = new Set<VideoCodec>(["avc"]);
 const MP4_AUDIO_CODECS = new Set<AudioCodec>(["aac"]);
 const WEBM_VIDEO_CODECS = new Set<VideoCodec>(["vp8", "vp9", "av1"]);
 const WEBM_AUDIO_CODECS = new Set<AudioCodec>(["opus", "vorbis"]);
+const PROGRESS_EMIT_INTERVAL_MS = 100;
+const PROGRESS_EMIT_STEP = 0.005;
 
 export type DirectJoinUnavailableReason =
 	| "unsupportedCodec"
 	| "incompatibleVideo"
 	| "incompatibleAudio"
-	| "trimNotKeyframe"
 	| "invalidSource"
 	| "writeFailed";
 
 export type DirectJoinExporterResult =
-	| ExportOutputResult
+	| (ExportOutputResult & { warnings: ExportWarning[] })
 	| { kind: "unavailable"; reason: DirectJoinUnavailableReason };
 
 type DirectJoinExporterEvents = {
 	progress: [progress: number];
 };
 
-interface PreparedClip {
-	clip: DirectJoinExportClip;
+interface PreparedSource {
 	input: Input;
 	videoTrack: InputVideoTrack;
 	audioTrack: InputAudioTrack | null;
 	videoConfig: VideoDecoderConfig;
 	audioConfig: AudioDecoderConfig | null;
+}
+
+interface PreparedClip extends PreparedSource {
+	clip: DirectJoinExportClip;
 	videoAnchorSeconds: number;
+	snapDeltaTicks: number;
 }
 
 type PreparedResult =
@@ -134,7 +144,14 @@ export class DirectJoinExporter extends EventEmitter<DirectJoinExporterEvents> {
 	private output: Output | null = null;
 	private inputs: Input[] = [];
 	private lastProgress = 0;
+	private lastProgressAt = 0;
 	private readonly totalDurationTicks: number;
+	private readonly diagnostics = {
+		sourceOpenMs: 0,
+		keyframeResolveMs: 0,
+		packetWriteMs: 0,
+		packetCount: 0,
+	};
 
 	constructor(
 		private params: {
@@ -210,7 +227,16 @@ export class DirectJoinExporter extends EventEmitter<DirectJoinExporterEvents> {
 			audioSource?.close();
 			await output.finalize();
 			this.reportProgress({ progress: 1 });
-			return getExportOutputResult({ target });
+			const warnings = this.getWarnings({ clips: prepared.clips });
+			if (warnings.length > 0) {
+				console.info(EXPORT_TEXT.diagnostics.directJoinKeyframeSnap, {
+					clips: warnings.map((warning) => ({
+						clipId: warning.clipId,
+						snapDeltaTicks: warning.snapDeltaTicks,
+					})),
+				});
+			}
+			return { ...getExportOutputResult({ target }), warnings };
 		} catch {
 			await this.output?.cancel();
 			if (this.isCancelled) return null;
@@ -218,72 +244,98 @@ export class DirectJoinExporter extends EventEmitter<DirectJoinExporterEvents> {
 		} finally {
 			this.output = null;
 			for (const input of this.inputs) input.dispose();
+			console.info(EXPORT_TEXT.diagnostics.directJoinPerformance, {
+				sourceCount: this.inputs.length,
+				sourceOpenMs: Math.round(this.diagnostics.sourceOpenMs),
+				keyframeResolveMs: Math.round(this.diagnostics.keyframeResolveMs),
+				packetWriteMs: Math.round(this.diagnostics.packetWriteMs),
+				packetCount: this.diagnostics.packetCount,
+			});
 			this.inputs = [];
 		}
 	}
 
 	private async prepareClips(): Promise<PreparedResult> {
 		const preparedClips: PreparedClip[] = [];
+		const preparedSources = new Map<string, PreparedSource>();
 
 		try {
 			for (const clip of this.params.candidate.clips) {
 				if (this.isCancelled) {
 					return { success: false, reason: "invalidSource" };
 				}
-				const input = new Input({
-					source: new BlobSource(clip.mediaAsset.file),
-					formats: ALL_FORMATS,
-				});
-				this.inputs.push(input);
+				let preparedSource = preparedSources.get(clip.mediaAsset.id);
+				if (!preparedSource) {
+					const sourceOpenStartedAt = performance.now();
+					try {
+						const input = new Input({
+							source: new BlobSource(clip.mediaAsset.file),
+							formats: ALL_FORMATS,
+						});
+						this.inputs.push(input);
 
-				const videoTracks = await input.getVideoTracks();
-				const audioTracks = await input.getAudioTracks();
-				if (videoTracks.length !== 1 || audioTracks.length > 1) {
-					return { success: false, reason: "invalidSource" };
+						const videoTracks = await input.getVideoTracks();
+						const audioTracks = await input.getAudioTracks();
+						if (videoTracks.length !== 1 || audioTracks.length > 1) {
+							return { success: false, reason: "invalidSource" };
+						}
+
+						const videoTrack = videoTracks[0];
+						if (
+							!videoTrack?.codec ||
+							!(await this.isVideoTrackSupported(videoTrack))
+						) {
+							return { success: false, reason: "unsupportedCodec" };
+						}
+						const videoConfig = await videoTrack.getDecoderConfig();
+						if (!videoConfig) {
+							return { success: false, reason: "invalidSource" };
+						}
+
+						const audioTrack = audioTracks[0] ?? null;
+						if (
+							audioTrack?.codec &&
+							!this.isAudioCodecSupported(audioTrack.codec)
+						) {
+							return { success: false, reason: "unsupportedCodec" };
+						}
+						const audioConfig = audioTrack
+							? await audioTrack.getDecoderConfig()
+							: null;
+						if (audioTrack && (!audioTrack.codec || !audioConfig)) {
+							return { success: false, reason: "invalidSource" };
+						}
+
+						preparedSource = {
+							input,
+							videoTrack,
+							audioTrack,
+							videoConfig,
+							audioConfig,
+						};
+						preparedSources.set(clip.mediaAsset.id, preparedSource);
+					} finally {
+						this.diagnostics.sourceOpenMs +=
+							performance.now() - sourceOpenStartedAt;
+					}
 				}
 
-				const videoTrack = videoTracks[0];
-				if (
-					!videoTrack?.codec ||
-					!(await this.isVideoTrackSupported(videoTrack))
-				) {
-					return { success: false, reason: "unsupportedCodec" };
-				}
-				const videoConfig = await videoTrack.getDecoderConfig();
-				if (!videoConfig) {
-					return { success: false, reason: "invalidSource" };
-				}
-
-				const audioTrack = audioTracks[0] ?? null;
-				if (
-					audioTrack?.codec &&
-					!this.isAudioCodecSupported(audioTrack.codec)
-				) {
-					return { success: false, reason: "unsupportedCodec" };
-				}
-				const audioConfig = audioTrack
-					? await audioTrack.getDecoderConfig()
-					: null;
-				if (audioTrack && (!audioTrack.codec || !audioConfig)) {
-					return { success: false, reason: "invalidSource" };
-				}
-
-				const videoAnchorSeconds = await this.getVideoAnchorSeconds({
+				const keyframeStartedAt = performance.now();
+				const videoAnchor = await this.getVideoAnchor({
 					clip,
-					videoTrack,
+					videoTrack: preparedSource.videoTrack,
 				});
-				if (videoAnchorSeconds === null) {
-					return { success: false, reason: "trimNotKeyframe" };
+				this.diagnostics.keyframeResolveMs +=
+					performance.now() - keyframeStartedAt;
+				if (!videoAnchor) {
+					return { success: false, reason: "invalidSource" };
 				}
 
 				preparedClips.push({
+					...preparedSource,
 					clip,
-					input,
-					videoTrack,
-					audioTrack,
-					videoConfig,
-					audioConfig,
-					videoAnchorSeconds,
+					videoAnchorSeconds: videoAnchor.seconds,
+					snapDeltaTicks: videoAnchor.snapDeltaTicks,
 				});
 			}
 		} catch {
@@ -337,13 +389,13 @@ export class DirectJoinExporter extends EventEmitter<DirectJoinExporterEvents> {
 		return allowedCodecs.has(codec);
 	}
 
-	private async getVideoAnchorSeconds({
+	private async getVideoAnchor({
 		clip,
 		videoTrack,
 	}: {
 		clip: DirectJoinExportClip;
 		videoTrack: InputVideoTrack;
-	}): Promise<number | null> {
+	}): Promise<{ seconds: number; snapDeltaTicks: number } | null> {
 		const trimStartSeconds = clip.trimStartTicks / this.params.ticksPerSecond;
 		const sink = new EncodedPacketSink(videoTrack);
 		const startPacket =
@@ -353,12 +405,19 @@ export class DirectJoinExporter extends EventEmitter<DirectJoinExporterEvents> {
 						verifyKeyPackets: true,
 					});
 		if (!startPacket || startPacket.type !== "key") return null;
-		if (trimStartSeconds === 0) return startPacket.timestamp;
-
 		const tolerance = 1 / videoTrack.timeResolution + Number.EPSILON;
-		return Math.abs(startPacket.timestamp - trimStartSeconds) <= tolerance
-			? startPacket.timestamp
-			: null;
+		if (startPacket.timestamp > trimStartSeconds + tolerance) return null;
+		const snapDeltaSeconds = Math.max(
+			0,
+			trimStartSeconds - startPacket.timestamp,
+		);
+		return {
+			seconds: startPacket.timestamp,
+			snapDeltaTicks:
+				snapDeltaSeconds <= tolerance
+					? 0
+					: Math.round(snapDeltaSeconds * this.params.ticksPerSecond),
+		};
 	}
 
 	private async writeClip({
@@ -377,41 +436,49 @@ export class DirectJoinExporter extends EventEmitter<DirectJoinExporterEvents> {
 				: null;
 		let video = videoCursor;
 		let audio = audioCursor;
+		const packetWriteStartedAt = performance.now();
 
-		while (video || audio) {
-			if (this.isCancelled) return;
-			const cursor =
-				!audio ||
-				(video && video.result.value.timestamp <= audio.result.value.timestamp)
-					? video
-					: audio;
-			if (!cursor) break;
+		try {
+			while (video || audio) {
+				if (this.isCancelled) return;
+				const cursor =
+					!audio ||
+					(video &&
+						video.result.value.timestamp <= audio.result.value.timestamp)
+						? video
+						: audio;
+				if (!cursor) break;
 
-			const packet = cursor.result.value;
-			const mappedPacket = packet.clone({
-				timestamp:
-					this.getClipOutputStartSeconds(preparedClip.clip) +
-					packet.timestamp -
-					preparedClip.videoAnchorSeconds,
-			});
-			if (cursor.kind === "video") {
-				await videoSource.add(mappedPacket, {
-					decoderConfig: preparedClip.videoConfig,
+				const packet = cursor.result.value;
+				const mappedPacket = packet.clone({
+					timestamp:
+						this.getClipOutputStartSeconds(preparedClip.clip) +
+						packet.timestamp -
+						preparedClip.videoAnchorSeconds,
 				});
-			} else if (audioSource && preparedClip.audioConfig) {
-				await audioSource.add(mappedPacket, {
-					decoderConfig: preparedClip.audioConfig,
-				});
-			}
+				if (cursor.kind === "video") {
+					await videoSource.add(mappedPacket, {
+						decoderConfig: preparedClip.videoConfig,
+					});
+				} else if (audioSource && preparedClip.audioConfig) {
+					await audioSource.add(mappedPacket, {
+						decoderConfig: preparedClip.audioConfig,
+					});
+				}
 
-			this.reportPacketProgress({ preparedClip, packet });
-			const nextResult = await cursor.iterator.next();
-			if (nextResult.done) {
-				if (cursor.kind === "video") video = null;
-				else audio = null;
-			} else {
-				cursor.result = nextResult;
+				this.diagnostics.packetCount += 1;
+				this.reportPacketProgress({ preparedClip, packet });
+				const nextResult = await cursor.iterator.next();
+				if (nextResult.done) {
+					if (cursor.kind === "video") video = null;
+					else audio = null;
+				} else {
+					cursor.result = nextResult;
+				}
 			}
+		} finally {
+			this.diagnostics.packetWriteMs +=
+				performance.now() - packetWriteStartedAt;
 		}
 	}
 
@@ -472,7 +539,7 @@ export class DirectJoinExporter extends EventEmitter<DirectJoinExporterEvents> {
 		preparedClip: PreparedClip;
 	}): Promise<EncodedPacket | undefined> {
 		const endSeconds =
-			preparedClip.clip.trimStartTicks / this.params.ticksPerSecond +
+			preparedClip.videoAnchorSeconds +
 			preparedClip.clip.durationTicks / this.params.ticksPerSecond;
 		const packetAtEnd = await sink.getPacket(endSeconds, {
 			metadataOnly: true,
@@ -509,8 +576,28 @@ export class DirectJoinExporter extends EventEmitter<DirectJoinExporterEvents> {
 
 	private reportProgress({ progress }: { progress: number }): void {
 		if (progress <= this.lastProgress && progress !== 1) return;
+		const now = performance.now();
+		if (
+			progress !== 1 &&
+			now - this.lastProgressAt < PROGRESS_EMIT_INTERVAL_MS &&
+			progress - this.lastProgress < PROGRESS_EMIT_STEP
+		) {
+			return;
+		}
 		this.lastProgress = progress;
+		this.lastProgressAt = now;
 		this.emit("progress", progress);
+	}
+
+	private getWarnings({ clips }: { clips: PreparedClip[] }): ExportWarning[] {
+		return clips
+			.filter((preparedClip) => preparedClip.snapDeltaTicks > 0)
+			.map((preparedClip) => ({
+				code: "direct-join-keyframe-snap",
+				clipId: preparedClip.clip.element.id,
+				snapDeltaTicks: preparedClip.snapDeltaTicks,
+				ticksPerSecond: this.params.ticksPerSecond,
+			}));
 	}
 
 	private getClipOutputStartSeconds(clip: DirectJoinExportClip): number {

@@ -5,6 +5,7 @@ import type {
 	ExportOptions,
 	ExportResult,
 	ExportStrategy,
+	ExportWarning,
 } from "@/lib/export";
 import { CanvasRenderer } from "@/services/renderer/canvas-renderer";
 import { SceneExporter } from "@/services/renderer/scene-exporter";
@@ -328,8 +329,8 @@ export class RendererManager {
 				const joinCandidate = {
 					...directJoinCandidate,
 					clips,
-					totalSourceBytes: clips.reduce(
-						(total, clip) => total + clip.mediaAsset.file.size,
+					totalSourceBytes: [...sourceFiles.values()].reduce(
+						(total, sourceFile) => total + sourceFile.size,
 						0,
 					),
 				};
@@ -375,6 +376,7 @@ export class RendererManager {
 					destination,
 					result: directJoinResult,
 					strategy,
+					warnings: directJoinResult.warnings,
 				});
 				this.logExportStageFinished({ strategy, startedAt });
 				return result;
@@ -613,10 +615,12 @@ export class RendererManager {
 		destination,
 		result,
 		strategy,
+		warnings = [],
 	}: {
 		destination: ExportDestination;
 		result: ExportOutputResult;
 		strategy: ExportStrategy;
+		warnings?: ExportWarning[];
 	}): Promise<ExportResult> {
 		if (result.kind === "buffer") {
 			return { success: true, kind: "buffer", buffer: result.buffer, strategy };
@@ -626,7 +630,24 @@ export class RendererManager {
 		}
 
 		await destination.complete();
-		return { success: true, kind: "saved", strategy };
+		const metrics = destination.getMetrics?.();
+		if (metrics) {
+			console.info(EXPORT_TEXT.diagnostics.destinationWriteCompleted, {
+				strategy,
+				bytesWritten: metrics.bytesWritten,
+				writeCalls: metrics.writeCalls,
+				flushCount: metrics.flushCount,
+				writeElapsedMs: Math.round(metrics.writeElapsedMs),
+				closeElapsedMs: Math.round(metrics.closeElapsedMs),
+				maxFlushBytes: metrics.maxFlushBytes,
+			});
+		}
+		return {
+			success: true,
+			kind: "saved",
+			strategy,
+			warnings: warnings.length > 0 ? warnings : undefined,
+		};
 	}
 
 	private async cancelDestination({

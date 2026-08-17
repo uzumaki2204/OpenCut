@@ -8,7 +8,9 @@ export const EXPORT_LANGUAGE = {
 			mp4: "MP4 (H.264) - Better compatibility",
 			webm: "WebM (VP9) - Smaller file size",
 			quality: "Quality",
-			qualityDirect: "Direct export - Copy or join without encoding",
+			qualityDirect: "Direct export - No encoding",
+			qualityDirectHelp:
+				"Copies or joins compatible clips. Cuts between keyframes are snapped earlier.",
 			qualityLow: "Low - Smallest file size",
 			qualityMedium: "Medium - Balanced",
 			qualityHigh: "High - Recommended",
@@ -31,6 +33,8 @@ export const EXPORT_LANGUAGE = {
 			unknownExport: "Unknown export error",
 			missingBuffer: "Export failed to produce a buffer",
 			missingStreamDestination: "Export stream destination is unavailable",
+			invalidFlushThreshold:
+				"The export write buffer size must be greater than zero.",
 			filePicker: "Could not open the export file destination",
 			directExportRequiresFilePicker:
 				"Direct export requires direct file saving. Use a Chromium-based browser with file-picker support.",
@@ -52,8 +56,6 @@ export const EXPORT_LANGUAGE = {
 					"These videos cannot be joined without encoding because their codec configuration, resolution, or rotation differs.",
 				incompatibleAudio:
 					"These videos cannot be joined without encoding because their audio codec, sample rate, or channel count differs.",
-				trimNotKeyframe:
-					"A Direct Join trim must start on a video keyframe. Move the cut to a keyframe or use encoded export.",
 				invalidSource:
 					"One or more source videos could not be read as a Direct Join input.",
 				writeFailed:
@@ -68,6 +70,16 @@ export const EXPORT_LANGUAGE = {
 			fallbackAudioTooLarge:
 				"This project requires an audio mixdown that is too large for browser memory. Remove complex audio edits or export without audio to avoid a browser crash.",
 		},
+		warnings: {
+			directJoinKeyframeSnap: ({
+				clipCount,
+				maxSnapMilliseconds,
+			}: {
+				clipCount: number;
+				maxSnapMilliseconds: number;
+			}) =>
+				`Direct export moved ${clipCount} cut(s) to an earlier keyframe, by up to ${Math.round(maxSnapMilliseconds)} ms.`,
+		},
 		diagnostics: {
 			exportFailed: "Export failed:",
 			strategyStarted: "Export strategy started:",
@@ -76,6 +88,9 @@ export const EXPORT_LANGUAGE = {
 			strategyCancelled: "Export strategy cancelled:",
 			persistedSourceUnavailable:
 				"Stored source snapshot is unavailable; using the imported file reference:",
+			directJoinPerformance: "Direct Join performance:",
+			directJoinKeyframeSnap: "Direct Join keyframe snap:",
+			destinationWriteCompleted: "Export destination write completed:",
 		},
 	},
 } as const;

@@ -66,7 +66,7 @@ function createCandidate({
 				file,
 			};
 			return {
-				element: {} as VideoElement,
+				element: { id: `clip-${index}` } as VideoElement,
 				mediaAsset,
 				outputStartTicks: index * TICKS_PER_SECOND,
 				trimStartTicks: 0,
@@ -129,5 +129,53 @@ describe("DirectJoinExporter", () => {
 			kind: "unavailable",
 			reason: "incompatibleVideo",
 		});
+	});
+
+	test("snaps a mid-GOP trim to the previous keyframe and preserves timeline timestamps", async () => {
+		const file = await createVp8File({ name: "shared.webm" });
+		const candidate = createCandidate({ files: [file, file] });
+		const sharedMediaAsset = candidate.clips[0]?.mediaAsset;
+		if (!sharedMediaAsset) throw new Error("Expected a shared media asset");
+		const firstClip = candidate.clips[0];
+		const secondClip = candidate.clips[1];
+		if (!firstClip || !secondClip) throw new Error("Expected two clips");
+		firstClip.trimStartTicks = 500;
+		firstClip.durationTicks = 500;
+		secondClip.mediaAsset = sharedMediaAsset;
+		secondClip.outputStartTicks = 500;
+		secondClip.durationTicks = 500;
+
+		const exporter = new DirectJoinExporter({
+			candidate,
+			format: "webm",
+			destination: { kind: "buffer" },
+			ticksPerSecond: TICKS_PER_SECOND,
+		});
+		const result = await exporter.export();
+
+		expect(result?.kind).toBe("buffer");
+		if (result?.kind !== "buffer") throw new Error("Expected joined buffer");
+		expect(result.warnings).toEqual([
+			{
+				code: "direct-join-keyframe-snap",
+				clipId: "clip-0",
+				snapDeltaTicks: 500,
+				ticksPerSecond: TICKS_PER_SECOND,
+			},
+		]);
+
+		const input = new Input({
+			source: new BlobSource(new Blob([result.buffer])),
+			formats: ALL_FORMATS,
+		});
+		const videoTrack = await input.getPrimaryVideoTrack();
+		if (!videoTrack) throw new Error("Expected joined video track");
+		const timestamps: number[] = [];
+		for await (const packet of new EncodedPacketSink(videoTrack).packets()) {
+			timestamps.push(packet.timestamp);
+		}
+		input.dispose();
+
+		expect(timestamps).toEqual([0, 0.5]);
 	});
 });

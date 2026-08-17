@@ -1,6 +1,8 @@
 import type { StreamTargetChunk } from "mediabunny";
-import type { ExportDestination } from "@/lib/export";
+import type { ExportDestination, ExportDestinationMetrics } from "@/lib/export";
 import { EXPORT_TEXT } from "@/lib/export/language";
+
+const DEFAULT_EXPORT_FLUSH_BYTES = 64 * 1024 * 1024;
 
 type ShowSaveFilePicker = (options: {
 	suggestedName: string;
@@ -17,6 +19,101 @@ type WindowWithSaveFilePicker = Window & {
 export interface ExportSourceIdentity {
 	name: string;
 	size: number;
+}
+
+export function createBufferedExportWritable({
+	writeChunk,
+	flushThresholdBytes = DEFAULT_EXPORT_FLUSH_BYTES,
+}: {
+	writeChunk: (chunk: StreamTargetChunk) => Promise<void>;
+	flushThresholdBytes?: number;
+}): {
+	writable: WritableStream<StreamTargetChunk>;
+	flush: () => Promise<void>;
+	getMetrics: () => ExportDestinationMetrics;
+	setCloseElapsedMs: (elapsedMs: number) => void;
+} {
+	if (!Number.isFinite(flushThresholdBytes) || flushThresholdBytes <= 0) {
+		throw new RangeError(EXPORT_TEXT.errors.invalidFlushThreshold);
+	}
+
+	let pendingPosition = 0;
+	let pendingByteLength = 0;
+	let pendingParts: Uint8Array<ArrayBuffer>[] = [];
+	const metrics: ExportDestinationMetrics = {
+		bytesWritten: 0,
+		writeCalls: 0,
+		flushCount: 0,
+		writeElapsedMs: 0,
+		closeElapsedMs: 0,
+		maxFlushBytes: 0,
+	};
+
+	const writeToFile = async (chunk: StreamTargetChunk): Promise<void> => {
+		const startedAt = performance.now();
+		await writeChunk(chunk);
+		metrics.writeElapsedMs += performance.now() - startedAt;
+		metrics.bytesWritten += chunk.data.byteLength;
+		metrics.writeCalls += 1;
+		metrics.flushCount += 1;
+		metrics.maxFlushBytes = Math.max(
+			metrics.maxFlushBytes,
+			chunk.data.byteLength,
+		);
+	};
+
+	const flush = async (): Promise<void> => {
+		if (pendingByteLength === 0) return;
+		const data =
+			pendingParts.length === 1
+				? pendingParts[0]
+				: new Uint8Array(pendingByteLength);
+		if (pendingParts.length > 1) {
+			let offset = 0;
+			for (const part of pendingParts) {
+				data.set(part, offset);
+				offset += part.byteLength;
+			}
+		}
+
+		const position = pendingPosition;
+		pendingParts = [];
+		pendingByteLength = 0;
+		await writeToFile({ type: "write", data, position });
+	};
+
+	const writable = new WritableStream<StreamTargetChunk>({
+		write: async (chunk) => {
+			if (chunk.data.byteLength === 0) return;
+			const isContiguous =
+				pendingByteLength === 0 ||
+				chunk.position === pendingPosition + pendingByteLength;
+			const fitsPendingBuffer =
+				pendingByteLength + chunk.data.byteLength <= flushThresholdBytes;
+
+			if (!isContiguous || !fitsPendingBuffer) await flush();
+			if (chunk.data.byteLength >= flushThresholdBytes) {
+				await writeToFile(chunk);
+				return;
+			}
+
+			if (pendingByteLength === 0) pendingPosition = chunk.position;
+			pendingParts.push(chunk.data);
+			pendingByteLength += chunk.data.byteLength;
+			if (pendingByteLength >= flushThresholdBytes) await flush();
+		},
+		close: flush,
+		abort: flush,
+	});
+
+	return {
+		writable,
+		flush,
+		getMetrics: () => ({ ...metrics }),
+		setCloseElapsedMs: (elapsedMs) => {
+			metrics.closeElapsedMs = elapsedMs;
+		},
+	};
 }
 
 export function isProtectedExportSource({
@@ -77,25 +174,28 @@ export async function createExportDestination({
 		}
 		const fileStream = await fileHandle.createWritable();
 		let settled = false;
-		const writable = new WritableStream<StreamTargetChunk>({
-			write: (chunk) => fileStream.write(chunk),
-			// mediabunny closes its wrapper before the app commits or aborts the file.
-			close: () => undefined,
+		const buffered = createBufferedExportWritable({
+			writeChunk: (chunk) => fileStream.write(chunk),
 		});
 
 		return {
 			kind: "stream",
-			writable,
+			writable: buffered.writable,
 			complete: async () => {
 				if (settled) return;
 				settled = true;
+				await buffered.flush();
+				const closeStartedAt = performance.now();
 				await fileStream.close();
+				buffered.setCloseElapsedMs(performance.now() - closeStartedAt);
 			},
 			cancel: async () => {
 				if (settled) return;
 				settled = true;
+				await buffered.flush();
 				await fileStream.abort();
 			},
+			getMetrics: buffered.getMetrics,
 		};
 	} catch (error) {
 		if (error instanceof DOMException && error.name === "AbortError") {
