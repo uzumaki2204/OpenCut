@@ -1,0 +1,5 @@
+- Cài đặt bun: irm https://moonrepo.dev/install/proto.ps1 | iex
+- Chạy powershell: Cd tới folder opencut và chạy Copy-Item apps/web/.env.example apps/web/.env
+- Mở file .env và xóa dòng môi trường development
+- Mở cmd trong folder opencut: bun run build:web
+- bun dev:web
