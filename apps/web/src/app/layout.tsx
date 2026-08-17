@@ -7,9 +7,11 @@ import { TooltipProvider } from "../components/ui/tooltip";
 import { baseMetaData } from "./metadata";
 import { BotIdClient } from "botid/client";
 import { webEnv } from "@/lib/env/web";
-import { Inter } from "next/font/google";
+// import { Inter } from "next/font/google";
 
-const siteFont = Inter({ subsets: ["latin"] });
+// const siteFont = Inter({ subsets: ["latin"] });
+// Bỏ import Inter từ next/font/google
+const siteFont = { className: "" };
 
 export const metadata = baseMetaData;
 
