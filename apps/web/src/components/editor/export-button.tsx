@@ -54,6 +54,7 @@ export function ExportButton() {
 	const hasProject = !!activeProject;
 
 	const handlePopoverOpenChange = ({ open }: { open: boolean }) => {
+		if (!open && editor.project.getExportState().isExporting) return;
 		if (!open) {
 			editor.project.cancelExport();
 			editor.project.clearExportState();
@@ -205,7 +206,15 @@ function ExportPopover({
 			: null);
 
 	return (
-		<PopoverContent className="bg-background mr-4 flex w-80 flex-col p-0">
+		<PopoverContent
+			className="bg-background mr-4 flex w-80 flex-col p-0"
+			onInteractOutside={(event) => {
+				if (isExporting) event.preventDefault();
+			}}
+			onEscapeKeyDown={(event) => {
+				if (isExporting) event.preventDefault();
+			}}
+		>
 			{displayedError ? (
 				<ExportError error={displayedError} onRetry={handleExport} />
 			) : (
