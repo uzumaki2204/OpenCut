@@ -27,6 +27,8 @@ export interface MediaAssetData {
 	duration?: number;
 	fps?: number;
 	hasAudio?: boolean;
+	videoCodec?: string;
+	videoCodecString?: string;
 	ephemeral?: boolean;
 	thumbnailUrl?: string;
 	storageMode?: MediaStorageMode;

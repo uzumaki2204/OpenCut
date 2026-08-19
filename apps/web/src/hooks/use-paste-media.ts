@@ -11,6 +11,7 @@ import { TICKS_PER_SECOND } from "@/lib/wasm";
 import { isTypableDOMElement } from "@/utils/browser";
 import type { MediaType } from "@/lib/media/types";
 import { getMediaStorageSummary } from "@/lib/media/persistence";
+import { getMediaPreviewSummary } from "@/lib/media/video-preview";
 
 const MEDIA_MIME_PREFIXES: MediaType[] = ["image", "video", "audio"];
 
@@ -104,6 +105,7 @@ export function usePasteMedia() {
 							uploadedCount: processedAssets.length,
 							assetNames: processedAssets.map((asset) => asset.name),
 							...getMediaStorageSummary({ assets: processedAssets }),
+							...getMediaPreviewSummary({ assets: processedAssets }),
 						};
 					},
 				});

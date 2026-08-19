@@ -9,6 +9,26 @@ const MEDIA_LANGUAGE = {
 		preparedNone: "No media assets were prepared",
 		failedPrefix: "Failed to prepare",
 		mediaFiles: "Media files",
+		ui: {
+			video: "Video",
+			directOnlyPreview:
+				"Preview unavailable. This video can only be used with a compatible Direct export.",
+		},
+		errors: {
+			canvasContext: "Could not create a canvas context.",
+			videoTrackMissing: "No video track was found in this file.",
+			nativeVideoLoad:
+				"The browser could not load this video with its native media decoder.",
+			nativeVideoFrame: "The browser could not read a frame from this video.",
+			nativeVideoTimeout: "The browser timed out while reading a video frame.",
+			nativeVideoDisposed: "The native video preview source has been disposed.",
+		},
+		upload: {
+			directOnlySingle: (name: string) =>
+				`${name} is ready for Direct export, but this browser cannot show its thumbnail or preview.`,
+			directOnlyMultiple: (count: number) =>
+				`${count} videos are ready for Direct export, but this browser cannot show their thumbnails or previews.`,
+		},
 		handleReadySuffix: "is ready without a browser-storage copy",
 		handleMultipleSuffix:
 			"media assets are ready without browser-storage copies",
@@ -21,6 +41,15 @@ const MEDIA_LANGUAGE = {
 		diagnostics: {
 			filePickerFallback:
 				"File System Access picker failed; using the compatibility file input:",
+			webCodecsThumbnailFailed:
+				"WebCodecs thumbnail decoding failed; trying the native video decoder:",
+			nativeVideoUnavailable: "Native video preview is unavailable:",
+			videoProcessingFailed: "Video processing failed:",
+			videoSinkInitializationFailed: "Failed to initialize video preview:",
+			videoSeekFailed: "Failed to seek video preview:",
+			videoPrefetchFailed: "Failed to prefetch a video frame:",
+			videoIteratorFailed: "Video frame iteration failed; restarting:",
+			videoSeekPrefetchFailed: "Failed to prefetch after seeking:",
 		},
 	},
 } as const;

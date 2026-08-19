@@ -1,11 +1,11 @@
-import { Input, ALL_FORMATS, BlobSource, VideoSampleSink } from "mediabunny";
 import { toast } from "sonner";
 import { getMediaTypeFromFile } from "@/lib/media/media-utils";
 import { formatStorageBytes } from "@/services/storage/quota";
 import { storageService } from "@/services/storage/service";
 import type { MediaAsset, MediaFileSource } from "@/lib/media/types";
-import { getVideoInfo } from "./mediabunny";
 import { getMediaStorageMode } from "./persistence";
+import { MEDIA_TEXT } from "./language";
+import { inspectVideoFile } from "./video-preview";
 
 export interface ProcessedMediaAsset extends Omit<MediaAsset, "id"> {}
 
@@ -83,51 +83,6 @@ const renderToThumbnailDataUrl = ({
 	draw({ context, width: size.width, height: size.height });
 	return canvas.toDataURL("image/jpeg", 0.8);
 };
-
-async function generateThumbnail({
-	videoFile,
-	timeInSeconds,
-}: {
-	videoFile: File;
-	timeInSeconds: number;
-}): Promise<string> {
-	const input = new Input({
-		source: new BlobSource(videoFile),
-		formats: ALL_FORMATS,
-	});
-
-	try {
-		const videoTrack = await input.getPrimaryVideoTrack();
-		if (!videoTrack) {
-			throw new Error("No video track found in the file");
-		}
-
-		const canDecode = await videoTrack.canDecode();
-		if (!canDecode) {
-			throw new Error("Video codec not supported for decoding");
-		}
-
-		const sink = new VideoSampleSink(videoTrack);
-		const frame = await sink.getSample(timeInSeconds);
-		if (!frame) {
-			throw new Error("Could not get frame at specified time");
-		}
-
-		try {
-			return renderToThumbnailDataUrl({
-				width: videoTrack.displayWidth,
-				height: videoTrack.displayHeight,
-				draw: ({ context, width, height }) => {
-					frame.draw(context, 0, 0, width, height);
-				},
-			});
-		} finally {
-			frame.close();
-		}
-	} finally {
-		input.dispose();
-	}
-}
 
 async function generateImageThumbnail({
 	imageFile,
@@ -222,6 +177,9 @@ export async function processMediaAssets({
 		let height: number | undefined;
 		let fps: number | undefined;
 		let hasAudio: boolean | undefined;
+		let videoCodec: string | undefined;
+		let videoCodecString: string | undefined;
+		let previewMode: MediaAsset["previewMode"];
 
 		try {
 			if (fileType === "image") {
@@ -231,7 +189,7 @@ export async function processMediaAssets({
 				height = result.height;
 			} else if (fileType === "video") {
 				try {
-					const videoInfo = await getVideoInfo({ videoFile: file });
+					const videoInfo = await inspectVideoFile({ videoFile: file });
 					duration = videoInfo.duration;
 					width = videoInfo.width;
 					height = videoInfo.height;
@@ -239,13 +197,13 @@ export async function processMediaAssets({
 						? Math.round(videoInfo.fps)
 						: undefined;
 					hasAudio = videoInfo.hasAudio;
-
-					thumbnailUrl = await generateThumbnail({
-						videoFile: file,
-						timeInSeconds: 1,
-					});
+					videoCodec = videoInfo.videoCodec;
+					videoCodecString = videoInfo.videoCodecString;
+					previewMode = videoInfo.previewMode;
+					thumbnailUrl = videoInfo.thumbnailUrl;
 				} catch (error) {
-					console.warn("Video processing failed", error);
+					previewMode = "unavailable";
+					console.warn(MEDIA_TEXT.diagnostics.videoProcessingFailed, error);
 				}
 			} else if (fileType === "audio") {
 				// For audio, we don't set width/height/fps (they'll be undefined)
@@ -263,6 +221,9 @@ export async function processMediaAssets({
 				height,
 				fps,
 				hasAudio,
+				videoCodec,
+				videoCodecString,
+				previewMode,
 				storageMode,
 				sourceHandle,
 			});

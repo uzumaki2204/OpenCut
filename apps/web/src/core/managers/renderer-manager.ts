@@ -30,6 +30,7 @@ import { TICKS_PER_SECOND } from "@/lib/wasm";
 import { formatTimecode } from "opencut-wasm";
 import { downloadBlob } from "@/utils/browser";
 import { storageService } from "@/services/storage/service";
+import { inspectVideoFile } from "@/lib/media/video-preview";
 
 type SnapshotResult =
 	| { success: true; blob: Blob; filename: string }
@@ -445,6 +446,41 @@ export class RendererManager {
 					strategy,
 					elapsedMs: Math.round(performance.now() - startedAt),
 				});
+			}
+
+			const timelineVideoMediaIds = new Set(
+				tracks.main.elements
+					.filter((element) => element.type === "video")
+					.map((element) => element.mediaId),
+			);
+			for (const track of tracks.overlay) {
+				if (track.type !== "video") continue;
+				for (const element of track.elements) {
+					if (element.type === "video") {
+						timelineVideoMediaIds.add(element.mediaId);
+					}
+				}
+			}
+			for (const mediaAsset of mediaAssets) {
+				if (
+					mediaAsset.type !== "video" ||
+					!timelineVideoMediaIds.has(mediaAsset.id)
+				) {
+					continue;
+				}
+
+				const previewMode =
+					mediaAsset.previewMode ??
+					(await inspectVideoFile({ videoFile: mediaAsset.file })).previewMode;
+				if (previewMode === "unavailable") {
+					await this.cancelDestination({ destination });
+					return {
+						success: false,
+						error: EXPORT_TEXT.errors.encodedExportVideoUnavailable(
+							mediaAsset.name,
+						),
+					};
+				}
 			}
 
 			if (

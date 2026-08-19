@@ -5,6 +5,7 @@ import { storageService } from "@/services/storage/service";
 import { generateUUID } from "@/utils/id";
 import { videoCache } from "@/services/video-cache/service";
 import { BatchCommand, RemoveMediaAssetCommand } from "@/lib/commands";
+import { inspectVideoFile } from "@/lib/media/video-preview";
 
 export class MediaManager {
 	private assets: MediaAsset[] = [];
@@ -85,11 +86,50 @@ export class MediaManager {
 			});
 			this.assets = mediaAssets;
 			this.notify();
+			void this.hydrateMissingVideoPreviews({ assets: mediaAssets });
 		} catch (error) {
 			console.error("Failed to load media assets:", error);
 		} finally {
 			this.isLoading = false;
 			this.notify();
+		}
+	}
+
+	private async hydrateMissingVideoPreviews({
+		assets,
+	}: {
+		assets: MediaAsset[];
+	}): Promise<void> {
+		for (const asset of assets) {
+			if (asset.type !== "video" || asset.thumbnailUrl) continue;
+
+			try {
+				const inspection = await inspectVideoFile({ videoFile: asset.file });
+				const currentAsset = this.assets.find((item) => item.id === asset.id);
+				if (!currentAsset || currentAsset.file !== asset.file) continue;
+
+				this.assets = this.assets.map((item) =>
+					item.id === asset.id
+						? {
+								...item,
+								thumbnailUrl: inspection.thumbnailUrl,
+								previewMode: inspection.previewMode,
+								videoCodec: inspection.videoCodec,
+								videoCodecString: inspection.videoCodecString,
+							}
+						: item,
+				);
+				this.notify();
+			} catch {
+				const currentAsset = this.assets.find((item) => item.id === asset.id);
+				if (!currentAsset || currentAsset.file !== asset.file) continue;
+				this.assets = this.assets.map((item) =>
+					item.id === asset.id
+						? { ...item, previewMode: "unavailable" as const }
+						: item,
+				);
+				this.notify();
+			}
 		}
 	}
 

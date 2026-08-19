@@ -69,6 +69,8 @@ export const EXPORT_LANGUAGE = {
 				"This browser cannot stream a large export directly to disk. Use a Chromium-based browser with file saving support, or export a shorter project.",
 			fallbackAudioTooLarge:
 				"This project requires an audio mixdown that is too large for browser memory. Remove complex audio edits or export without audio to avoid a browser crash.",
+			encodedExportVideoUnavailable: (name: string) =>
+				`Encoded export cannot decode ${name} in this browser. Use a compatible Direct export or convert the source video to H.264 first.`,
 		},
 		warnings: {
 			directJoinKeyframeSnap: ({

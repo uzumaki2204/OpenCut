@@ -20,6 +20,7 @@ import { computeDropTarget } from "@/components/editor/panels/timeline/drop-targ
 import { getDragData, hasDragData } from "@/lib/drag-data";
 import { getDroppedMediaFileSources } from "@/lib/media/file-source";
 import { getMediaStorageSummary } from "@/lib/media/persistence";
+import { getMediaPreviewSummary } from "@/lib/media/video-preview";
 import type { MediaFileSource } from "@/lib/media/types";
 import type { TrackType, DropTarget, ElementType } from "@/lib/timeline";
 import type {
@@ -547,6 +548,7 @@ export function useTimelineDragDrop({
 						uploadedCount: processedAssets.length,
 						assetNames: processedAssets.map((asset) => asset.name),
 						...getMediaStorageSummary({ assets: processedAssets }),
+						...getMediaPreviewSummary({ assets: processedAssets }),
 					};
 				},
 			});

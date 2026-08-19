@@ -49,6 +49,8 @@ import { MASKABLE_ELEMENT_TYPES } from "@/lib/timeline";
 import type { MediaAsset } from "@/lib/media/types";
 import type { MediaFileSource } from "@/lib/media/types";
 import { getMediaStorageSummary } from "@/lib/media/persistence";
+import { getMediaPreviewSummary } from "@/lib/media/video-preview";
+import { MEDIA_TEXT } from "@/lib/media/language";
 import { cn } from "@/utils/ui";
 import {
 	CloudUploadIcon,
@@ -58,6 +60,7 @@ import {
 	Image02Icon,
 	MusicNote03Icon,
 	Video01Icon,
+	Alert02Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon, type IconSvgElement } from "@hugeicons/react";
 
@@ -107,6 +110,7 @@ export function MediaView() {
 						uploadedCount: processedAssets.length,
 						assetNames: processedAssets.map((asset) => asset.name),
 						...getMediaStorageSummary({ assets: processedAssets }),
+						...getMediaPreviewSummary({ assets: processedAssets }),
 					};
 				},
 			});
@@ -479,13 +483,36 @@ function MediaPreview({
 			);
 		}
 
-		return (
+		const placeholder = (
 			<MediaTypePlaceholder
 				icon={Video01Icon}
-				label="Video"
+				label={MEDIA_TEXT.ui.video}
 				duration={item.duration}
 				variant="muted"
 			/>
+		);
+		if (item.previewMode !== "unavailable") return placeholder;
+
+		return (
+			<TooltipProvider>
+				<Tooltip>
+					<TooltipTrigger asChild>
+						<div className="relative size-full">
+							{placeholder}
+							<span
+								className="absolute top-1 right-1 grid size-6 place-items-center rounded-sm bg-amber-500 text-black shadow-sm"
+								role="img"
+								aria-label={MEDIA_TEXT.ui.directOnlyPreview}
+							>
+								<HugeiconsIcon icon={Alert02Icon} className="size-4" />
+							</span>
+						</div>
+					</TooltipTrigger>
+					<TooltipContent>
+						<p>{MEDIA_TEXT.ui.directOnlyPreview}</p>
+					</TooltipContent>
+				</Tooltip>
+			</TooltipProvider>
 		);
 	}
 
