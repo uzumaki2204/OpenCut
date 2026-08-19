@@ -179,20 +179,33 @@ describe("getDirectCopyCandidate", () => {
 		).not.toBeNull();
 	});
 
-	test("copies the source even when timeline duration and trim differ", () => {
-		expect(
-			selectDirectCopyCandidate({
-				options: DIRECT_OPTIONS,
-				elementPatch: {
-					trimStart: TICKS_PER_SECOND,
-					trimEnd: TICKS_PER_SECOND,
-					sourceDuration: EIGHT_HOURS + 2 * TICKS_PER_SECOND,
-				},
-			}),
-		).not.toBeNull();
+	test("selects Direct Join when one source clip is trimmed", () => {
+		const { tracks, mediaAssets } = buildFixture({
+			elementPatch: {
+				trimStart: TICKS_PER_SECOND,
+				duration: EIGHT_HOURS - TICKS_PER_SECOND,
+			},
+		});
+		const assessment = assessDirectExport({
+			tracks,
+			mediaAssets,
+			options: DIRECT_OPTIONS,
+		});
+
+		expect(assessment.eligible).toBe(true);
+		if (!assessment.eligible || assessment.candidate.kind !== "join") {
+			throw new Error("Expected a Direct Join candidate");
+		}
+		expect(assessment.candidate.clips).toHaveLength(1);
+		expect(assessment.candidate.clips[0]?.trimStartTicks).toBe(
+			TICKS_PER_SECOND,
+		);
+		expect(assessment.candidate.clips[0]?.durationTicks).toBe(
+			EIGHT_HOURS - TICKS_PER_SECOND,
+		);
 	});
 
-	test("copies the source while ignoring visual, speed, and audio edits", () => {
+	test("does not byte-copy while ignoring visual, speed, and audio edits", () => {
 		expect(
 			selectDirectCopyCandidate({
 				options: DIRECT_OPTIONS,
@@ -204,10 +217,10 @@ describe("getDirectCopyCandidate", () => {
 					volume: -6,
 				},
 			}),
-		).not.toBeNull();
+		).toBeNull();
 	});
 
-	test("copies one source after the video is split into multiple elements", () => {
+	test("selects Direct Join for reordered cuts from one source", () => {
 		const { tracks, mediaAssets } = buildFixture();
 		const sourceElement = tracks.main.elements[0];
 		if (!sourceElement || sourceElement.type !== "video") {
@@ -218,14 +231,14 @@ describe("getDirectCopyCandidate", () => {
 			{
 				...sourceElement,
 				duration: splitTime,
-				trimEnd: splitTime,
+				trimStart: splitTime,
 			},
 			{
 				...sourceElement,
 				id: "video-2",
 				startTime: splitTime,
 				duration: splitTime,
-				trimStart: splitTime,
+				trimEnd: splitTime,
 			},
 		];
 
@@ -237,9 +250,12 @@ describe("getDirectCopyCandidate", () => {
 
 		expect(assessment.eligible).toBe(true);
 		if (assessment.eligible) {
-			expect(assessment.candidate.kind).toBe("copy");
-			if (assessment.candidate.kind !== "copy") return;
-			expect(assessment.candidate.mediaAsset.id).toBe("media-1");
+			expect(assessment.candidate.kind).toBe("join");
+			if (assessment.candidate.kind !== "join") return;
+			expect(assessment.candidate.clips).toHaveLength(2);
+			expect(
+				assessment.candidate.clips.map((clip) => clip.trimStartTicks),
+			).toEqual([splitTime, 0]);
 		}
 	});
 
@@ -417,9 +433,9 @@ describe("getDirectCopyCandidate", () => {
 
 		expect(assessment.eligible).toBe(true);
 		if (assessment.eligible) {
-			expect(assessment.candidate.kind).toBe("copy");
-			if (assessment.candidate.kind !== "copy") return;
-			expect(assessment.candidate.mediaAsset.id).toBe("media-1");
+			expect(assessment.candidate.kind).toBe("join");
+			if (assessment.candidate.kind !== "join") return;
+			expect(assessment.candidate.clips).toHaveLength(2);
 		}
 	});
 

@@ -137,21 +137,6 @@ function sourceContainerMatchesExport({
 	return sourceExtension === format;
 }
 
-function getDirectCopySourceIdentity({
-	mediaAsset,
-}: {
-	mediaAsset: MediaAsset;
-}): string {
-	return [
-		mediaAsset.name.trim().toLowerCase(),
-		mediaAsset.file.size,
-		mediaAsset.duration ?? "",
-		mediaAsset.width ?? "",
-		mediaAsset.height ?? "",
-		mediaAsset.fps ?? "",
-	].join("\0");
-}
-
 function canJoinVideoElement({ element }: { element: VideoElement }): boolean {
 	return (
 		!element.hidden &&
@@ -167,6 +152,21 @@ function canJoinVideoElement({ element }: { element: VideoElement }): boolean {
 		element.muted !== true &&
 		element.isSourceAudioEnabled !== false &&
 		(element.volume ?? 0) === 0
+	);
+}
+
+function canDirectCopyVideoElement({
+	element,
+}: {
+	element: VideoElement;
+}): boolean {
+	return (
+		canJoinVideoElement({ element }) &&
+		Math.abs(element.startTime) <= 1 &&
+		element.trimStart === 0 &&
+		element.trimEnd === 0 &&
+		typeof element.sourceDuration === "number" &&
+		Math.abs(element.duration - element.sourceDuration) <= 1
 	);
 }
 
@@ -257,11 +257,6 @@ export function assessDirectExport({
 	}
 
 	const videoMediaAssets = sourceMediaAssets as MediaAsset[];
-	const sourceIdentities = new Set(
-		videoMediaAssets.map((mediaAsset) =>
-			getDirectCopySourceIdentity({ mediaAsset }),
-		),
-	);
 	const mediaAsset = videoMediaAssets[0];
 	if (!mediaAsset) {
 		return { eligible: false, reason: "missingSource" };
@@ -279,8 +274,16 @@ export function assessDirectExport({
 		return { eligible: false, reason: "formatMismatch" };
 	}
 
-	if (sourceIdentities.size === 1) {
-		// Direct copy preserves the original source and intentionally ignores edits.
+	const mainElement = tracks.main.elements[0];
+	if (
+		videoElements.length === 1 &&
+		hasExactlyOneTimelineElement({ tracks }) &&
+		!tracks.main.hidden &&
+		!tracks.main.muted &&
+		mainElement?.type === "video" &&
+		mainElement.id === videoElements[0]?.id &&
+		canDirectCopyVideoElement({ element: mainElement })
+	) {
 		return { eligible: true, candidate: { kind: "copy", mediaAsset } };
 	}
 
